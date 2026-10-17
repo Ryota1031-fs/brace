@@ -122,3 +122,18 @@ def test_history_uses_only_earlier_days():
     # 3日目の時点では、その艇の選手は前の2日で12レースずつ走っている
     third = h[h.date == sorted(h.date.unique())[2]]
     assert (third.hist_starts == 24).all() and (third.lane_starts == 24).all()
+
+
+def test_discord_message():
+    from datetime import date
+
+    from boatrace_yosou import discord
+
+    assert discord.valid_url("https://discord.com/api/webhooks/123/abc-DEF_9")
+    assert not discord.valid_url("https://example.com/api/webhooks/123/abc")
+    msg = discord.format_message(
+        date(2026, 10, 17), "01", "桐生", 2, "LightGBM", True, {1: 0.5, 2: 0.2, 3: 0.1, 4: 0.1, 5: 0.06, 6: 0.04},
+        {"3連単": [{"combo": "1-2-3", "prob": 0.08}]},
+        [{"ticket": "2連単", "combo": "2-1", "prob": 0.05, "odds": 30.0, "ev": 1.5}],
+    )
+    assert "桐生 2R" in msg and "1️⃣2️⃣3️⃣" in msg and "jcd=01" in msg and len(msg) <= 2000

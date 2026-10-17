@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from boatrace_yosou import beforeinfo, odds, ui
+from boatrace_yosou import beforeinfo, discord, odds, ui
 from boatrace_yosou.backtest import evaluate
 from boatrace_yosou.constants import TICKET_TYPES, VENUES
 from boatrace_yosou.download import DATA_DIR, download_day, extract_lzh
@@ -42,6 +42,16 @@ with st.sidebar:
             st.error(f"取得できませんでした: {e}")
     with st.expander("ファイルから読み込む"):
         uploaded = st.file_uploader("番組表ファイル（.lzh / .txt）", type=["lzh", "txt"])
+    with st.expander("Discord連携"):
+        saved_url = discord.load_url()
+        st.caption("友人のDiscordのチャンネルに予想を投稿します。URLはこのPCの中にだけ保存されます。")
+        new_url = st.text_input("ウェブフックのURL", value=saved_url, type="password")
+        if st.button("保存", width="stretch"):
+            if discord.valid_url(new_url):
+                discord.save_url(new_url)
+                st.success("保存しました。予想画面の「Discordに送る」で投稿できます。")
+            else:
+                st.error("ウェブフックのURLの形ではありません。Discordで「ウェブフックURLをコピー」したものを貼ってください。")
     st.divider()
     if st.button("アプリを最新版に更新", type="primary", width="stretch"):
         from boatrace_yosou.update import update
@@ -210,6 +220,7 @@ for col, t in zip(cols, TICKET_TYPES):
     col.markdown(ui.ticket_card(t, [pick_info(t, c, p) for c, p in top]), unsafe_allow_html=True)
 
 st.markdown(ui.section("妙味のある買い目（確率のわりに配当が高い順）"), unsafe_allow_html=True)
+vals = []
 if race_odds:
     cands = [pick_info(t, c, p) | {"ticket": t} for t in TICKET_TYPES for c, p in all_probs[t].items()]
     vals = sorted([x for x in cands if x["value"]], key=lambda x: -x["ev"])[:8]
@@ -226,6 +237,23 @@ elif is_live:
     st.caption("「オッズを取得」を押すと、確率とオッズを比べて妙味のある買い目に印を付けます。")
 else:
     st.caption("オッズは当日の締切前だけ取得できます。")
+
+# ---- Discord ----
+if discord.load_url():
+    if st.button("Discordに送る", help="このレースの1着確率とおすすめの買い目（オッズがあれば妙味の買い目も）を投稿します"):
+        msg = discord.format_message(
+            race_date, venue, VENUES.get(venue, venue), race, model_col, bool(has_ex.loc[g.index].all()),
+            dict(zip(g["boat"], g[model_col])),
+            {t: [pick_info(t, c, p) for c, p in sorted(all_probs[t].items(), key=lambda kv: -kv[1])[:top_n]] for t in TICKET_TYPES},
+            vals,
+        )
+        try:
+            discord.send(discord.load_url(), msg)
+            st.success("Discordに投稿しました。")
+        except Exception as e:
+            st.error(f"投稿できませんでした: {e}")
+else:
+    st.caption("画面左の「Discord連携」にウェブフックのURLを保存すると、ここに「Discordに送る」ボタンが出ます。")
 
 # ---- 結果 ----
 st.markdown(ui.section("実際の結果"), unsafe_allow_html=True)

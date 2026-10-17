@@ -16,11 +16,17 @@ python -m boatrace_yosou.backtest --top 5
 streamlit run app.py
 ```
 
+## Windowsでの起動と更新
+- `start.bat` をダブルクリックすると起動する（必要な部品も自動で確認する）。
+- 画面左の「アプリを最新版に更新」を押すと、GitHub の最新版で上書きする。取り込んだデータ（`data/`）はそのまま残る。
+
 ## 構成
 - `boatrace_yosou/download.py` 公式ファイル（LZH）の取得と展開
 - `boatrace_yosou/parse.py` 番組表(B)・競走成績(K)を表に変換
 - `boatrace_yosou/model.py` 特徴量、ルールベース、LightGBM、Harville法による買い目確率
 - `boatrace_yosou/backtest.py` 日付で学習と検証に分けた的中率・回収率の集計
+- `boatrace_yosou/history.py` 過去の結果から選手の直近成績を作る
+- `boatrace_yosou/update.py` GitHub から最新版を取って上書きする
 - `app.py` Streamlitの画面
 
 ## 注意

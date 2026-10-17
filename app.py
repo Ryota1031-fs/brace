@@ -32,6 +32,20 @@ with st.sidebar:
     uploaded = st.file_uploader("または番組表ファイル（.lzh / .txt）を読み込む", type=["lzh", "txt"])
     top_n = st.slider("券種ごとの表示点数", 1, 10, 5)
     refresh_results = st.button("この日の結果を公式から取り直す", help="当日の結果は夜にまとめて公開されます")
+    st.divider()
+    if st.button("アプリを最新版に更新"):
+        from boatrace_yosou.update import update
+
+        try:
+            files = update()
+            if files:
+                st.cache_resource.clear()
+                st.cache_data.clear()
+                st.success(f"{len(files)}個のファイルを更新しました。黒い画面を閉じて、もう一度 start で開き直してください。")
+            else:
+                st.info("すでに最新です。")
+        except Exception as e:
+            st.error(f"更新できませんでした: {e}")
 
 
 @st.cache_resource

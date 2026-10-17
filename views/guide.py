@@ -10,10 +10,13 @@ st.markdown(ui.CSS, unsafe_allow_html=True)
 st.markdown(ui.GUIDE_CSS, unsafe_allow_html=True)
 
 
-def bars(rows: list[tuple[str, float]], scale: float = 1.0, fmt: str = "{:.0%}") -> str:
+def bars(rows: list[tuple[str, float | None]], scale: float = 1.0, fmt: str = "{:.0%}") -> str:
     """ラベルと割合の横棒。scale は棒の長さの最大（1.0 なら 100% で端まで）。"""
     out = []
     for label, v in rows:
+        if v is None:  # 途中を省くときの区切り
+            out.append(f'<div class="gbar"><div class="gl sub">{label}</div></div>')
+            continue
         out.append(
             f'<div class="gbar"><div class="gl">{label}</div>'
             f'<div class="bar"><span style="width:{min(v / scale, 1) * 100:.1f}%"></span></div>'
@@ -79,7 +82,7 @@ with c1:
 with c2:
     box("1号艇の1着率（場によって差がある）", bars([
         ("徳山", 0.630), ("大村", 0.618), ("下関", 0.613), ("芦屋", 0.585), ("住之江", 0.584),
-        ("…", 0), ("江戸川", 0.480), ("鳴門", 0.469), ("平和島", 0.457), ("戸田", 0.442),
+        ("（中略）", None), ("江戸川", 0.480), ("鳴門", 0.469), ("平和島", 0.457), ("戸田", 0.442),
     ], 0.7) + '<p class="note">徳山・大村・下関は1号艇が強く、戸田・平和島・鳴門・江戸川は外の艇にもチャンスがある「荒れやすい」場です。</p>')
 
 st.markdown(ui.section("2. 選手の強さ（級別と全国勝率）"), unsafe_allow_html=True)

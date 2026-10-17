@@ -160,3 +160,20 @@ def payout_card(ticket: str, rows: pd.DataFrame) -> str:
 
 def kpi(title: str, value: str, tone: str = "") -> str:
     return f'<div class="kpi"><div class="t">{html.escape(title)}</div><div class="v {tone}">{value}</div></div>'
+
+
+# 見方ガイドのページ用
+GUIDE_CSS = """
+<style>
+.gcard { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; margin-bottom: 14px;
+  box-shadow: 0 2px 8px rgba(20,33,61,.04); color: var(--ink); }
+.gcard h3 { font-size: 1rem; margin: 0 0 10px; color: var(--ink); }
+.gcard p, .gcard li { font-size: .9rem; line-height: 1.7; }
+.gcard ul, .gcard ol { padding-left: 1.2em; margin: 0; }
+.steps li { margin-bottom: 4px; }
+.gbar { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.gbar .gl { width: 110px; font-size: .85rem; font-weight: 700; color: var(--ink); }
+.gbar .bar { flex: 1; height: 12px; }
+.gbar .gv { width: 48px; text-align: right; font-weight: 800; font-size: .9rem; color: var(--ink); }
+</style>
+"""

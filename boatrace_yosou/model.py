@@ -20,6 +20,7 @@ FEATURES = [
     "boat", "class_rank", "age", "weight", "nat_win", "nat_2ren", "loc_win", "loc_2ren",
     "motor_2ren", "boat_2ren", "venue_code", "race",
     "nat_win_diff", "nat_win_rank", "motor_2ren_diff", "class_rank_diff",
+    "boat_2ren_diff", "motor_2ren_rank", "loc_win_diff",
 ]
 
 # 学習データがないときに使う枠別の1着率の目安（全国の傾向をおおまかに置いた値）
@@ -34,6 +35,9 @@ def add_features(entries: pd.DataFrame) -> pd.DataFrame:
     df["nat_win_diff"] = df["nat_win"] - g["nat_win"].transform("mean")
     df["nat_win_rank"] = g["nat_win"].rank(ascending=False, method="min")
     df["motor_2ren_diff"] = df["motor_2ren"] - g["motor_2ren"].transform("mean")
+    df["motor_2ren_rank"] = g["motor_2ren"].rank(ascending=False, method="min")
+    df["boat_2ren_diff"] = df["boat_2ren"] - g["boat_2ren"].transform("mean")
+    df["loc_win_diff"] = df["loc_win"] - g["loc_win"].transform("mean")
     df["class_rank_diff"] = df["class_rank"] - g["class_rank"].transform("mean")
     return df
 
@@ -42,25 +46,42 @@ def normalize_in_race(df: pd.DataFrame, col: str) -> pd.Series:
     return df[col] / df.groupby(RACE_KEY)[col].transform("sum")
 
 
+# ルールベースの重み: 勝率・モーター2連率・ボート2連率・級別の差がどれだけ1着に効くか
+DEFAULT_WEIGHTS = {"nat_win_diff": 0.35, "motor_2ren_diff": 0.02, "boat_2ren_diff": 0.01, "class_rank_diff": 0.15}
+
+
 class RuleModel:
-    def __init__(self, lane_win: dict[int, float] | None = None):
+    def __init__(self, lane_win: dict[int, float] | None = None, weights: dict[str, float] | None = None):
         self.lane_win = lane_win or DEFAULT_LANE_WIN
+        self.weights = {**DEFAULT_WEIGHTS, **(weights or {})}
 
     def fit(self, df: pd.DataFrame) -> "RuleModel":
-        """学習データがあれば枠別の1着率を実データから置き換える。"""
+        """学習データがあれば枠別の1着率を実データから置き換え、各項目の重みも当てはまりが良くなるよう決める。"""
         rate = (df["position"] == 1).groupby(df["boat"]).mean()
         if len(rate) == 6:
             self.lane_win = rate.to_dict()
+        # 1項目ずつ、候補の中から「実際の1着艇に高い確率を付けられる」値を選ぶ（2周して落ち着かせる）
+        won = (df["position"] == 1).to_numpy()
+        grids = {
+            "nat_win_diff": np.linspace(0, 1.0, 21),
+            "motor_2ren_diff": np.linspace(0, 0.06, 13),
+            "boat_2ren_diff": np.linspace(0, 0.06, 13),
+            "class_rank_diff": np.linspace(0, 0.5, 11),
+        }
+        for _ in range(2):
+            for k, grid in grids.items():
+                scores = []
+                for v in grid:
+                    self.weights[k] = v
+                    p = self.predict(df).to_numpy()
+                    scores.append(np.log(np.clip(p[won], 1e-9, 1)).sum())
+                self.weights[k] = float(grid[int(np.argmax(scores))])
         return self
 
     def predict(self, df: pd.DataFrame) -> pd.Series:
         base = df["boat"].map(self.lane_win)
-        strength = (
-            base
-            * np.exp(0.35 * df["nat_win_diff"])
-            * np.exp(0.02 * df["motor_2ren_diff"])
-            * np.exp(0.15 * df["class_rank_diff"])
-        )
+        z = sum(w * df[k].fillna(0) for k, w in self.weights.items())
+        strength = base * np.exp(z)
         tmp = df[RACE_KEY].assign(s=strength.values)
         return normalize_in_race(tmp, "s")
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .constants import TICKET_TYPES
@@ -69,16 +70,27 @@ def main() -> None:
     gbm_base = GBMModel(FEATURES).fit(train)
     gbm_hist = GBMModel(FEATURES + HISTORY_FEATURES).fit(train)
 
+    print("ルールベースの重み:", {k: round(v, 3) for k, v in rule.weights.items()})
     for name, m in [("ルールベース", rule), ("LightGBM（出走表のみ）", gbm_base), ("LightGBM（出走表＋過去成績）", gbm_hist)]:
         print(f"\n== {name}（上位{a.top}点）==")
-        print(evaluate(test, m.predict(test), data["payouts"], a.top)[["races", "的中率", "回収率"]])
+        probs = m.predict(test)
+        won = (test["position"] == 1).to_numpy()
+        # 実際の1着艇に付けた確率の対数の平均（0に近いほど当てはまりが良い）。点数の区切りに左右されにくい
+        print(f"1着艇への当てはまり: {np.log(np.clip(probs.to_numpy()[won], 1e-9, 1)).mean():.4f}")
+        print(evaluate(test, probs, data["payouts"], a.top)[["races", "的中率", "回収率"]])
+
+    imp = pd.Series(gbm_hist.model.booster_.feature_importance("gain"), index=gbm_hist.features)
+    print("\nLightGBM（出走表＋過去成績）で効いている項目（上位15）:")
+    print((imp / imp.sum()).sort_values(ascending=False).head(15).round(3))
 
     # 画面で使うモデルは全期間で学び直して保存する
     models = ROOT / "models"
     GBMModel(FEATURES + HISTORY_FEATURES).fit(df).save(models / "gbm.txt")
-    pd.Series(RuleModel().fit(df).lane_win).to_json(models / "lane_win.json")
+    full_rule = RuleModel().fit(df)
+    pd.Series(full_rule.lane_win).to_json(models / "lane_win.json")
+    pd.Series(full_rule.weights).to_json(models / "rule_weights.json")
     # 画面で直近成績を計算するための過去成績（必要な列だけ）
-    data["results"][["date", "venue", "race", "boat", "racer_no", "position", "st"]].to_csv(
+    data["results"][["date", "venue", "race", "boat", "racer_no", "motor_no", "boat_no", "position", "st"]].to_csv(
         models / "results_history.csv.gz", index=False)
 
 

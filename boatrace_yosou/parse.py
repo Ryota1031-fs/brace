@@ -119,6 +119,8 @@ def parse_k(text: str, race_date: date) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "boat": int(boat), "racer_no": int(racer_no),
                     "position": int(pos_tok) if pos_tok.isdigit() else None,
                     "status": None if pos_tok.isdigit() else pos_tok,
+                    "motor_no": int(nums[0]) if nums and nums[0].isdigit() else None,
+                    "boat_no": int(nums[1]) if len(nums) > 1 and nums[1].isdigit() else None,
                     "exhibition": _to_float(nums[2]) if len(nums) > 2 else None,
                     "course": int(nums[3]) if len(nums) > 3 and nums[3].isdigit() else None,
                     "st": _to_float(nums[4]) if len(nums) > 4 else None,

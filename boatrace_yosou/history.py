@@ -3,6 +3,7 @@
 レース当日より前の結果だけを使う（当日以降の結果が混ざると検証の成績が実力以上に良く見えるため）。
 - 直近180日: 出走数、1着率、2連対率、平均スタート
 - 直近365日の枠別: その枠での出走数と1着率
+- 直近90日のモーター・ボート別（場ごと）: 2連対率。出走表の「2連率」は使い始めからの通算なので、最近の調子を別に見る
 率は出走数が少ないと振れるので、全体平均に向けてならしている。
 """
 from __future__ import annotations
@@ -11,11 +12,13 @@ import pandas as pd
 
 RECENT_DAYS = 180
 LANE_DAYS = 365
+MACHINE_DAYS = 90
 PRIOR_N = 10  # この出走数ぶん全体平均を混ぜてならす
 
 HISTORY_FEATURES = [
     "hist_starts", "hist_win", "hist_top2", "hist_st", "lane_starts", "lane_win",
     "hist_win_diff", "hist_st_diff", "lane_win_diff",
+    "motor_recent_top2", "boat_recent_top2", "motor_recent_top2_diff", "boat_recent_top2_diff",
 ]
 
 
@@ -51,6 +54,8 @@ def add_history(df: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
             out[c] = float("nan")
         return out
     res = results[results["racer_no"].notna()]
+    if "motor_no" not in res:
+        res = res.assign(motor_no=float("nan"), boat_no=float("nan"))
     key_date = pd.to_datetime(out["date"])
     base_win = (res["position"] == 1).mean()
     base_top2 = (res["position"] <= 2).mean()
@@ -60,18 +65,19 @@ def add_history(df: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
     # 出走表の日付ごとに「その日より前」の集計を引けるよう、出走表の日付も行として足してから集計する
     def stats_for(by: list[str], days: int, left_on: list[str]) -> pd.DataFrame:
         daily = _daily(res, by)
-        targets = out[left_on].assign(date=key_date).rename(columns=dict(zip(left_on, by))).drop_duplicates()
+        targets = out[left_on].assign(date=out["date_ts"] if "date_ts" in out else key_date).rename(columns=dict(zip(left_on, by))).drop_duplicates()
         targets = targets.assign(start=0, win=0, top2=0, st_sum=0.0, st_n=0)
         merged = pd.concat([daily, targets], ignore_index=True).groupby(by + ["date"], as_index=False).sum()
         rolled = _rolling_before(merged, by, days)
         return targets[by + ["date"]].merge(rolled, on=by + ["date"], how="left")
 
+    out = out.assign(date_ts=key_date)
     s = stats_for(["racer_no"], RECENT_DAYS, ["racer_no"])
     s["hist_starts"] = s["start"]
     s["hist_win"] = (s["win"] + PRIOR_N * base_win) / (s["start"] + PRIOR_N)
     s["hist_top2"] = (s["top2"] + PRIOR_N * base_top2) / (s["start"] + PRIOR_N)
     s["hist_st"] = (s["st_sum"] + PRIOR_N * base_st) / (s["st_n"] + PRIOR_N)
-    out = out.assign(date_ts=key_date).merge(
+    out = out.merge(
         s[["racer_no", "date", "hist_starts", "hist_win", "hist_top2", "hist_st"]].rename(columns={"date": "date_ts"}),
         on=["racer_no", "date_ts"], how="left",
     )
@@ -84,9 +90,21 @@ def add_history(df: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
         l[["racer_no", "boat", "date", "lane_starts", "lane_win"]].rename(columns={"date": "date_ts"}),
         on=["racer_no", "boat", "date_ts"], how="left",
     )
+
+    for kind in ("motor", "boat"):
+        col = f"{kind}_no"
+        m = stats_for(["venue", col], MACHINE_DAYS, ["venue", col]) if res[col].notna().any() else None
+        name = f"{kind}_recent_top2"
+        if m is None:
+            out[name] = float("nan")
+            continue
+        m[name] = (m["top2"] + PRIOR_N * base_top2) / (m["start"] + PRIOR_N)
+        out = out.merge(m[["venue", col, "date", name]].rename(columns={"date": "date_ts"}),
+                        on=["venue", col, "date_ts"], how="left")
+
     out = out.drop(columns="date_ts")
     # 同じレースの他の艇と比べた差（強さはレース内の相対で効くため）
     g = out.groupby(["date", "venue", "race"])
-    for c in ["hist_win", "hist_st", "lane_win"]:
+    for c in ["hist_win", "hist_st", "lane_win", "motor_recent_top2", "boat_recent_top2"]:
         out[f"{c}_diff"] = out[c] - g[c].transform("mean")
     return out

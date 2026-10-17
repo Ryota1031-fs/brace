@@ -53,8 +53,9 @@ def load_models():
     lane = None
     if (MODEL_DIR / "lane_win.json").exists():
         lane = {int(k): v for k, v in json.loads((MODEL_DIR / "lane_win.json").read_text()).items()}
+    weights = json.loads((MODEL_DIR / "rule_weights.json").read_text()) if (MODEL_DIR / "rule_weights.json").exists() else None
     gbm = GBMModel.load(MODEL_DIR / "gbm.txt") if (MODEL_DIR / "gbm.txt").exists() else None
-    return RuleModel(lane), gbm
+    return RuleModel(lane, weights), gbm
 
 
 @st.cache_data
@@ -71,8 +72,8 @@ def load_history(local_files: tuple[str, ...]) -> pd.DataFrame:
         parts.append(parse_k(p.read_text(encoding="utf-8"), d)[0])
     if not parts:
         return pd.DataFrame()
-    cols = ["date", "venue", "race", "boat", "racer_no", "position", "st"]
-    return pd.concat([x[cols] for x in parts if not x.empty], ignore_index=True).drop_duplicates(["date", "venue", "race", "boat"])
+    cols = ["date", "venue", "race", "boat", "racer_no", "motor_no", "boat_no", "position", "st"]
+    return pd.concat([x.reindex(columns=cols) for x in parts if not x.empty], ignore_index=True).drop_duplicates(["date", "venue", "race", "boat"])
 
 
 if uploaded is not None:
@@ -137,13 +138,16 @@ choices = ["ルール"] + (["LightGBM"] if gbm is not None else [])
 model_col = c3.radio("予想に使うモデル", choices, index=len(choices) - 1, horizontal=True)
 
 g = df[(df["venue"] == venue) & (df["race"] == race)].sort_values("boat")
-show = g[["boat", "name", "class", "age", "nat_win", "loc_win", "motor_2ren", "boat_2ren"] + choices].rename(columns={
+# 最近90日のモーター・ボートの2連対率（過去の結果が手元にあるときだけ出る）
+recent = [c for c in ["motor_recent_top2", "boat_recent_top2"] if g[c].notna().any()]
+show = g[["boat", "name", "class", "age", "nat_win", "loc_win", "motor_2ren", "boat_2ren"] + recent + choices].rename(columns={
     "boat": "艇", "name": "選手", "class": "級", "age": "年齢", "nat_win": "全国勝率",
     "loc_win": "当地勝率", "motor_2ren": "モーター2連率", "boat_2ren": "ボート2連率",
+    "motor_recent_top2": "モーター近況", "boat_recent_top2": "ボート近況",
 })
 st.subheader("各艇の1着確率")
 fmt = {"全国勝率": "{:.2f}", "当地勝率": "{:.2f}", "モーター2連率": "{:.1f}", "ボート2連率": "{:.1f}"}
-fmt.update({c: "{:.1%}" for c in choices})
+fmt.update({c: "{:.1%}" for c in choices + ["モーター近況", "ボート近況"] if c in show})
 st.dataframe(show.style.format(fmt), hide_index=True, width="stretch")
 
 race_pay = payouts[(payouts["venue"] == venue) & (payouts["race"] == race)] if not payouts.empty else payouts

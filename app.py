@@ -45,11 +45,20 @@ if uploaded is not None:
     text = extract_lzh(blob) if uploaded.name.endswith(".lzh") else blob.decode("cp932", errors="replace")
 else:
     path = DATA_DIR / "B" / f"b{race_date:%y%m%d}.txt"
+    tried = st.session_state.setdefault("auto_fetched", set())
+    if not path.exists() and race_date not in tried:
+        # 選んだ日の出走表が手元になければ、公式から自動で取りにいく（同じ日は1回だけ）
+        tried.add(race_date)
+        with st.spinner("出走表を公式から取得しています…"):
+            try:
+                path = download_day("B", race_date) or path
+            except Exception as e:
+                st.warning(f"出走表を自動で取得できませんでした: {e}")
     text = path.read_text(encoding="utf-8") if path.exists() else ""
 
 entries = parse_b(text, race_date) if text else pd.DataFrame()
 if entries.empty:
-    st.info("出走表がありません。左のボタンで取得するか、ファイルを読み込んでください。")
+    st.info("この日の出走表はまだ公式に出ていません（たいてい前日の夕方以降に出ます）。あとで左のボタンを押すか、ファイルを読み込んでください。")
     st.stop()
 
 df = add_features(entries)

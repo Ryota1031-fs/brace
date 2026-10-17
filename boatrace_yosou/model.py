@@ -2,6 +2,7 @@
 
 - ルールベース: 枠ごとの基本勝率 × 勝率・モーター・級別の補正
 - LightGBM: 出走表の数値から1着かどうかを学習し、レース内で合計1になるよう正規化
+- 展示タイム（レース直前の試走のタイム）があれば、それも使う。速いほどモーターの調子が良い目安になる
 買い目の確率は Harville 法（1着確率から順に条件付きで掛け合わせる）で出す。
 """
 from __future__ import annotations
@@ -23,6 +24,9 @@ FEATURES = [
     "boat_2ren_diff", "motor_2ren_rank", "loc_win_diff",
 ]
 
+# 展示タイム。学習には競走成績ファイルの値を、当日は直前情報ページの値を使う（同じもの）
+EX_FEATURES = ["exhibition", "ex_diff", "ex_rank"]
+
 # 学習データがないときに使う枠別の1着率の目安（全国の傾向をおおまかに置いた値）
 DEFAULT_LANE_WIN = {1: 0.55, 2: 0.14, 3: 0.12, 4: 0.10, 5: 0.06, 6: 0.03}
 
@@ -39,6 +43,19 @@ def add_features(entries: pd.DataFrame) -> pd.DataFrame:
     df["boat_2ren_diff"] = df["boat_2ren"] - g["boat_2ren"].transform("mean")
     df["loc_win_diff"] = df["loc_win"] - g["loc_win"].transform("mean")
     df["class_rank_diff"] = df["class_rank"] - g["class_rank"].transform("mean")
+    return add_exhibition(df)
+
+
+def add_exhibition(df: pd.DataFrame) -> pd.DataFrame:
+    """exhibition 列（秒）から、レース内の差と順位を作る。列がなければ空にする。"""
+    df = df.copy()
+    ex = df["exhibition"] if "exhibition" in df else pd.Series(np.nan, index=df.index)
+    ex = ex.where(ex.between(6.0, 7.5))  # 欠場などの不正な値は外す
+    df["exhibition"] = ex
+    g = ex.groupby([df[k] for k in RACE_KEY])
+    df["ex_diff"] = ex - g.transform("mean")
+    df["ex_rank"] = g.rank(method="min")
+    df["ex_fast"] = -df["ex_diff"]  # ルールベース用（速いほど大きい）
     return df
 
 
@@ -47,7 +64,7 @@ def normalize_in_race(df: pd.DataFrame, col: str) -> pd.Series:
 
 
 # ルールベースの重み: 勝率・モーター2連率・ボート2連率・級別の差がどれだけ1着に効くか
-DEFAULT_WEIGHTS = {"nat_win_diff": 0.35, "motor_2ren_diff": 0.02, "boat_2ren_diff": 0.01, "class_rank_diff": 0.15}
+DEFAULT_WEIGHTS = {"nat_win_diff": 0.35, "motor_2ren_diff": 0.02, "boat_2ren_diff": 0.01, "class_rank_diff": 0.15, "ex_fast": 5.0}
 
 
 class RuleModel:
@@ -67,7 +84,10 @@ class RuleModel:
             "motor_2ren_diff": np.linspace(0, 0.06, 13),
             "boat_2ren_diff": np.linspace(0, 0.06, 13),
             "class_rank_diff": np.linspace(0, 0.5, 11),
+            "ex_fast": np.linspace(0, 20, 21),
         }
+        if df["ex_fast"].isna().all():
+            grids.pop("ex_fast")
         for _ in range(2):
             for k, grid in grids.items():
                 scores = []

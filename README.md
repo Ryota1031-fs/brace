@@ -26,6 +26,7 @@ streamlit run app.py
 - `boatrace_yosou/model.py` 特徴量、ルールベース、LightGBM、Harville法による買い目確率
 - `boatrace_yosou/backtest.py` 日付で学習と検証に分けた的中率・回収率の集計
 - `boatrace_yosou/history.py` 過去の結果から選手の直近成績を作る
+- `boatrace_yosou/beforeinfo.py` 公式の直前情報ページから展示タイムを取る
 - `boatrace_yosou/update.py` GitHub から最新版を取って上書きする
 - `app.py` Streamlitの画面
 

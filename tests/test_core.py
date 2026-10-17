@@ -11,7 +11,7 @@ import pytest
 
 from boatrace_yosou.backtest import evaluate, merge_training
 from boatrace_yosou.history import HISTORY_FEATURES, add_history
-from boatrace_yosou.model import FEATURES, GBMModel, RuleModel, add_features, ticket_probs
+from boatrace_yosou.model import EX_FEATURES, FEATURES, GBMModel, RuleModel, add_features, ticket_probs
 from boatrace_yosou.parse import parse_b, parse_k
 
 D = date(2026, 1, 1)
@@ -93,6 +93,7 @@ def _random_data(days=30, seed=0):
                                  loc_win=win[b - 1], loc_2ren=30.0, motor_no=1, motor_2ren=rng.uniform(20, 50),
                                  boat_no=1, boat_2ren=30.0))
                 ress.append(dict(date=d, venue="01", race=race, boat=b, racer_no=1000 + b, st=0.15,
+                                 exhibition=6.8 + rng.uniform(-0.1, 0.1),
                                  position=int(np.where(order == b)[0][0] + 1)))
             o = list(map(str, order))
             pays += [dict(date=d, venue="01", race=race, ticket="2連単", combo="-".join(o[:2]), payout=800),
@@ -104,7 +105,9 @@ def test_pipeline_runs():
     data = _random_data()
     df = merge_training(data)
     train, test = df[df.date < df.date.max()], df[df.date == df.date.max()].reset_index(drop=True)
-    for m in (RuleModel().fit(train), GBMModel().fit(train), GBMModel(FEATURES + HISTORY_FEATURES).fit(train)):
+    models = (RuleModel().fit(train), GBMModel().fit(train), GBMModel(FEATURES + HISTORY_FEATURES + EX_FEATURES).fit(train))
+    assert test["ex_diff"].notna().all()
+    for m in models:
         probs = m.predict(test)
         assert probs.groupby([test.date, test.venue, test.race]).sum().round(6).eq(1).all()
         out = evaluate(test, probs, data["payouts"], 5)

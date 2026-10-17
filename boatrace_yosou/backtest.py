@@ -12,16 +12,16 @@ import pandas as pd
 
 from .constants import TICKET_TYPES
 from .history import HISTORY_FEATURES, add_history
-from .model import FEATURES, RACE_KEY, GBMModel, RuleModel, add_features, top_tickets
+from .model import EX_FEATURES, FEATURES, RACE_KEY, GBMModel, RuleModel, add_exhibition, add_features, top_tickets
 from .parse import build_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def merge_training(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    e = add_history(add_features(data["entries"]), data["results"])
-    r = data["results"][RACE_KEY + ["boat", "position"]]
-    df = e.merge(r, on=RACE_KEY + ["boat"], how="inner")
+    e = add_history(add_features(data["entries"]), data["results"]).drop(columns="exhibition")
+    r = data["results"].reindex(columns=RACE_KEY + ["boat", "position", "exhibition"])
+    df = add_exhibition(e.merge(r, on=RACE_KEY + ["boat"], how="inner"))
     # 6艇そろって着順が出ているレースだけを使う（欠場・F・不成立を除く）
     full = df.groupby(RACE_KEY)["position"].transform(lambda s: s.notna().sum() == 6)
     return df[full].reset_index(drop=True)
@@ -66,26 +66,36 @@ def main() -> None:
     train, test = df[df["date"] < cut], df[df["date"] >= cut].reset_index(drop=True)
     print(f"学習 {train['date'].nunique()}日 / 検証 {test['date'].nunique()}日（{cut} 以降）, 検証レース数 {test.groupby(RACE_KEY).ngroups}")
 
+    no_ex = lambda d: add_exhibition(d.drop(columns="exhibition"))  # 展示タイムなしの状態を作る
+    rule_noex = RuleModel().fit(no_ex(train))
     rule = RuleModel().fit(train)
     gbm_base = GBMModel(FEATURES).fit(train)
-    gbm_hist = GBMModel(FEATURES + HISTORY_FEATURES).fit(train)
+    gbm_ex = GBMModel(FEATURES + EX_FEATURES).fit(train)
+    gbm_hist = GBMModel(FEATURES + HISTORY_FEATURES + EX_FEATURES).fit(train)
 
     print("ルールベースの重み:", {k: round(v, 3) for k, v in rule.weights.items()})
-    for name, m in [("ルールベース", rule), ("LightGBM（出走表のみ）", gbm_base), ("LightGBM（出走表＋過去成績）", gbm_hist)]:
+    candidates = [
+        ("ルールベース（展示なし）", rule_noex, no_ex(test)), ("ルールベース（展示あり）", rule, test),
+        ("LightGBM（出走表のみ）", gbm_base, test), ("LightGBM（出走表＋展示）", gbm_ex, test),
+        ("LightGBM（出走表＋過去成績＋展示）", gbm_hist, test),
+    ]
+    for name, m, t in candidates:
         print(f"\n== {name}（上位{a.top}点）==")
-        probs = m.predict(test)
+        probs = m.predict(t)
         won = (test["position"] == 1).to_numpy()
         # 実際の1着艇に付けた確率の対数の平均（0に近いほど当てはまりが良い）。点数の区切りに左右されにくい
         print(f"1着艇への当てはまり: {np.log(np.clip(probs.to_numpy()[won], 1e-9, 1)).mean():.4f}")
         print(evaluate(test, probs, data["payouts"], a.top)[["races", "的中率", "回収率"]])
 
     imp = pd.Series(gbm_hist.model.booster_.feature_importance("gain"), index=gbm_hist.features)
-    print("\nLightGBM（出走表＋過去成績）で効いている項目（上位15）:")
+    print("\nLightGBM（出走表＋過去成績＋展示）で効いている項目（上位15）:")
     print((imp / imp.sum()).sort_values(ascending=False).head(15).round(3))
 
     # 画面で使うモデルは全期間で学び直して保存する
     models = ROOT / "models"
-    GBMModel(FEATURES + HISTORY_FEATURES).fit(df).save(models / "gbm.txt")
+    # 画面用は、PCに過去成績がなくても動く2つ（出走表のみ／出走表＋展示）
+    GBMModel(FEATURES).fit(df).save(models / "gbm.txt")
+    GBMModel(FEATURES + EX_FEATURES).fit(df).save(models / "gbm_ex.txt")
     full_rule = RuleModel().fit(df)
     pd.Series(full_rule.lane_win).to_json(models / "lane_win.json")
     pd.Series(full_rule.weights).to_json(models / "rule_weights.json")

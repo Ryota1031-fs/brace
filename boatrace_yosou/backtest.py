@@ -27,7 +27,8 @@ def merge_training(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 def evaluate(df: pd.DataFrame, probs: pd.Series, payouts: pd.DataFrame, n: int) -> pd.DataFrame:
     df = df.assign(prob=probs.values)
-    pay = payouts.set_index(RACE_KEY + ["ticket", "combo"])["payout"]
+    # 同着だと同じ組番の払戻が複数行になることがあるので合計しておく
+    pay = payouts.groupby(RACE_KEY + ["ticket", "combo"])["payout"].sum()
     stats = {t: {"races": 0, "hits": 0, "cost": 0, "return": 0} for t in TICKET_TYPES}
     for key, g in df.groupby(RACE_KEY):
         picks = top_tickets(dict(zip(g["boat"], g["prob"])), n)

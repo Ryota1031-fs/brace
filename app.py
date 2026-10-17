@@ -163,7 +163,9 @@ else:
     pay_cols = st.columns(len(TICKET_TYPES))
     for col, t in zip(pay_cols, TICKET_TYPES):
         rows = race_pay[race_pay["ticket"] == t]
-        col.metric(t, " / ".join(rows["combo"]) or "なし", " / ".join(f"{v:,}円" for v in rows["payout"]), delta_color="off")
+        col.markdown(f"**{t}**")
+        col.markdown(f"### {' / '.join(rows['combo']) or 'なし'}")
+        col.caption("払戻（100円あたり） " + " / ".join(f"{v:,}円" for v in rows["payout"]))
 
     # この日の全レースで、いまの設定（モデルと点数）どおりに100円ずつ買った場合の成績
     done = df.merge(payouts[RACE_KEY].drop_duplicates(), on=RACE_KEY)

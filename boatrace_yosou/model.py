@@ -66,8 +66,9 @@ class RuleModel:
 
 
 class GBMModel:
-    def __init__(self):
+    def __init__(self, features: list[str] | None = None):
         self.model = None
+        self.features = features or FEATURES
 
     def fit(self, df: pd.DataFrame) -> "GBMModel":
         import lightgbm as lgb
@@ -78,11 +79,11 @@ class GBMModel:
             min_child_samples=50, subsample=0.8, subsample_freq=1,
             colsample_bytree=0.8, verbose=-1,
         )
-        self.model.fit(df[FEATURES], y, categorical_feature=["venue_code"])
+        self.model.fit(df[self.features], y, categorical_feature=["venue_code"])
         return self
 
     def predict(self, df: pd.DataFrame) -> pd.Series:
-        p = self.model.predict_proba(df[FEATURES])[:, 1]
+        p = self.model.predict_proba(df[self.features])[:, 1]
         tmp = df[RACE_KEY].assign(p=p)
         return normalize_in_race(tmp, "p")
 
@@ -94,8 +95,8 @@ class GBMModel:
     def load(cls, path: Path) -> "GBMModel":
         import lightgbm as lgb
 
-        m = cls()
         booster = lgb.Booster(model_file=str(path))
+        m = cls(booster.feature_name())
 
         class _Wrap:
             def predict_proba(self, X):

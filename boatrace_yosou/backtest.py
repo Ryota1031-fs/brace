@@ -10,14 +10,15 @@ from pathlib import Path
 import pandas as pd
 
 from .constants import TICKET_TYPES
-from .model import RACE_KEY, GBMModel, RuleModel, add_features, top_tickets
+from .history import HISTORY_FEATURES, add_history
+from .model import FEATURES, RACE_KEY, GBMModel, RuleModel, add_features, top_tickets
 from .parse import build_dataset
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def merge_training(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    e = add_features(data["entries"])
+    e = add_history(add_features(data["entries"]), data["results"])
     r = data["results"][RACE_KEY + ["boat", "position"]]
     df = e.merge(r, on=RACE_KEY + ["boat"], how="inner")
     # 6艇そろって着順が出ているレースだけを使う（欠場・F・不成立を除く）
@@ -65,13 +66,20 @@ def main() -> None:
     print(f"学習 {train['date'].nunique()}日 / 検証 {test['date'].nunique()}日（{cut} 以降）, 検証レース数 {test.groupby(RACE_KEY).ngroups}")
 
     rule = RuleModel().fit(train)
-    gbm = GBMModel().fit(train)
-    gbm.save(ROOT / "models" / "gbm.txt")
-    pd.Series(rule.lane_win).to_json(ROOT / "models" / "lane_win.json")
+    gbm_base = GBMModel(FEATURES).fit(train)
+    gbm_hist = GBMModel(FEATURES + HISTORY_FEATURES).fit(train)
 
-    for name, m in [("ルールベース", rule), ("LightGBM", gbm)]:
+    for name, m in [("ルールベース", rule), ("LightGBM（出走表のみ）", gbm_base), ("LightGBM（出走表＋過去成績）", gbm_hist)]:
         print(f"\n== {name}（上位{a.top}点）==")
         print(evaluate(test, m.predict(test), data["payouts"], a.top)[["races", "的中率", "回収率"]])
+
+    # 画面で使うモデルは全期間で学び直して保存する
+    models = ROOT / "models"
+    GBMModel(FEATURES + HISTORY_FEATURES).fit(df).save(models / "gbm.txt")
+    pd.Series(RuleModel().fit(df).lane_win).to_json(models / "lane_win.json")
+    # 画面で直近成績を計算するための過去成績（必要な列だけ）
+    data["results"][["date", "venue", "race", "boat", "racer_no", "position", "st"]].to_csv(
+        models / "results_history.csv.gz", index=False)
 
 
 if __name__ == "__main__":

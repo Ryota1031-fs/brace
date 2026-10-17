@@ -12,6 +12,7 @@ from boatrace_yosou.constants import TICKET_TYPES, VENUES
 from boatrace_yosou.download import DATA_DIR, download_day, extract_lzh
 from boatrace_yosou.model import RACE_KEY, GBMModel, RuleModel, add_features, top_tickets
 from boatrace_yosou.backtest import evaluate
+from boatrace_yosou.history import add_history
 from boatrace_yosou.parse import parse_b, parse_k
 
 ROOT = Path(__file__).resolve().parent
@@ -40,6 +41,24 @@ def load_models():
         lane = {int(k): v for k, v in json.loads((MODEL_DIR / "lane_win.json").read_text()).items()}
     gbm = GBMModel.load(MODEL_DIR / "gbm.txt") if (MODEL_DIR / "gbm.txt").exists() else None
     return RuleModel(lane), gbm
+
+
+@st.cache_data
+def load_history(local_files: tuple[str, ...]) -> pd.DataFrame:
+    """お渡しした過去成績と、このPCで取り込んだ結果ファイルをまとめる（直近成績の計算用）。"""
+    parts = []
+    if (MODEL_DIR / "results_history.csv.gz").exists():
+        h = pd.read_csv(MODEL_DIR / "results_history.csv.gz", dtype={"venue": str})
+        h["date"] = pd.to_datetime(h["date"]).dt.date
+        parts.append(h)
+    for f in local_files:
+        p = Path(f)
+        d = date(2000 + int(p.stem[1:3]), int(p.stem[3:5]), int(p.stem[5:7]))
+        parts.append(parse_k(p.read_text(encoding="utf-8"), d)[0])
+    if not parts:
+        return pd.DataFrame()
+    cols = ["date", "venue", "race", "boat", "racer_no", "position", "st"]
+    return pd.concat([x[cols] for x in parts if not x.empty], ignore_index=True).drop_duplicates(["date", "venue", "race", "boat"])
 
 
 if uploaded is not None:
@@ -84,6 +103,8 @@ k_path = fetch_once("K", race_date, force=refresh_results)
 results, payouts = parse_k(k_path.read_text(encoding="utf-8"), race_date) if k_path else (pd.DataFrame(), pd.DataFrame())
 
 df = add_features(entries)
+local_k = tuple(sorted(str(p) for p in (DATA_DIR / "K").glob("k*.txt")))
+df = add_history(df, load_history(local_k))
 rule, gbm = load_models()
 df["ルール"] = rule.predict(df).values
 model_col = "ルール"

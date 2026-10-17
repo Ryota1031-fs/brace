@@ -10,7 +10,8 @@ import pandas as pd
 import pytest
 
 from boatrace_yosou.backtest import evaluate, merge_training
-from boatrace_yosou.model import GBMModel, RuleModel, add_features, ticket_probs
+from boatrace_yosou.history import HISTORY_FEATURES, add_history
+from boatrace_yosou.model import FEATURES, GBMModel, RuleModel, add_features, ticket_probs
 from boatrace_yosou.parse import parse_b, parse_k
 
 D = date(2026, 1, 1)
@@ -91,7 +92,8 @@ def _random_data(days=30, seed=0):
                                  branch="x", weight=52, **{"class": "B1"}, nat_win=win[b - 1], nat_2ren=30.0,
                                  loc_win=win[b - 1], loc_2ren=30.0, motor_no=1, motor_2ren=rng.uniform(20, 50),
                                  boat_no=1, boat_2ren=30.0))
-                ress.append(dict(date=d, venue="01", race=race, boat=b, position=int(np.where(order == b)[0][0] + 1)))
+                ress.append(dict(date=d, venue="01", race=race, boat=b, racer_no=1000 + b, st=0.15,
+                                 position=int(np.where(order == b)[0][0] + 1)))
             o = list(map(str, order))
             pays += [dict(date=d, venue="01", race=race, ticket="2連単", combo="-".join(o[:2]), payout=800),
                      dict(date=d, venue="01", race=race, ticket="3連単", combo="-".join(o[:3]), payout=5000)]
@@ -102,8 +104,18 @@ def test_pipeline_runs():
     data = _random_data()
     df = merge_training(data)
     train, test = df[df.date < df.date.max()], df[df.date == df.date.max()].reset_index(drop=True)
-    for m in (RuleModel().fit(train), GBMModel().fit(train)):
+    for m in (RuleModel().fit(train), GBMModel().fit(train), GBMModel(FEATURES + HISTORY_FEATURES).fit(train)):
         probs = m.predict(test)
         assert probs.groupby([test.date, test.venue, test.race]).sum().round(6).eq(1).all()
         out = evaluate(test, probs, data["payouts"], 5)
         assert out.loc["3連単", "races"] == 12
+
+
+def test_history_uses_only_earlier_days():
+    data = _random_data(days=5)
+    h = add_history(data["entries"], data["results"])
+    first = h[h.date == h.date.min()]
+    assert (first.hist_starts == 0).all()
+    # 3日目の時点では、その艇の選手は前の2日で12レースずつ走っている
+    third = h[h.date == sorted(h.date.unique())[2]]
+    assert (third.hist_starts == 24).all() and (third.lane_starts == 24).all()

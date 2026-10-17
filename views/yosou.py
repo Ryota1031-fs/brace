@@ -53,7 +53,9 @@ with st.sidebar:
             else:
                 st.error("ウェブフックのURLの形ではありません。Discordで「ウェブフックURLをコピー」したものを貼ってください。")
     st.divider()
-    if st.button("アプリを最新版に更新", type="primary", width="stretch"):
+    # Webに載せた版（Streamlit Community Cloud は /mount/src に置かれる）は、GitHub に上げると自動で新しくなる
+    on_cloud = str(ROOT).startswith("/mount/src")
+    if not on_cloud and st.button("アプリを最新版に更新", type="primary", width="stretch"):
         from boatrace_yosou.update import update
 
         try:

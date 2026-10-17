@@ -36,3 +36,5 @@ streamlit run app.py
 
 ## Discordに予想を送る
 画面左の「Discord連携」に、Discordのチャンネルで作ったウェブフックのURLを保存すると、予想画面に「Discordに送る」ボタンが出ます。URLは `data/discord.json` にだけ保存され、GitHubには上がりません。投稿するのはアプリの予想（確率と買い目）と公式のレースページへのリンクだけです。
+
+Web版（Streamlit Community Cloud）では入力欄は出ません。管理画面の Settings → Secrets に `discord_webhook_url = "https://discord.com/api/webhooks/…"` と書くと、ボタンが出ます。

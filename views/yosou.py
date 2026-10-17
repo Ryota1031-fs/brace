@@ -19,6 +19,19 @@ from boatrace_yosou.parse import parse_b, parse_k
 
 ROOT = Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "models"
+# Webに載せた版（Streamlit Community Cloud は /mount/src に置かれる）。GitHub に上げると自動で新しくなる
+ON_CLOUD = str(ROOT).startswith("/mount/src")
+
+
+def webhook_url() -> str:
+    """Web版は見る人みんなに設定欄が見えるので、URLは管理画面の Secrets にだけ置く。"""
+    if not ON_CLOUD:
+        return discord.load_url()
+    try:
+        return st.secrets.get("discord_webhook_url", "")
+    except Exception:  # Secrets が未設定
+        return ""
+
 
 st.markdown(ui.CSS, unsafe_allow_html=True)
 
@@ -42,20 +55,19 @@ with st.sidebar:
             st.error(f"取得できませんでした: {e}")
     with st.expander("ファイルから読み込む"):
         uploaded = st.file_uploader("番組表ファイル（.lzh / .txt）", type=["lzh", "txt"])
-    with st.expander("Discord連携"):
-        saved_url = discord.load_url()
-        st.caption("友人のDiscordのチャンネルに予想を投稿します。URLはこのPCの中にだけ保存されます。")
-        new_url = st.text_input("ウェブフックのURL", value=saved_url, type="password")
-        if st.button("保存", width="stretch"):
-            if discord.valid_url(new_url):
-                discord.save_url(new_url)
-                st.success("保存しました。予想画面の「Discordに送る」で投稿できます。")
-            else:
-                st.error("ウェブフックのURLの形ではありません。Discordで「ウェブフックURLをコピー」したものを貼ってください。")
+    if not ON_CLOUD:  # Web版はURLが見る人に見えないよう、Secrets で設定する
+        with st.expander("Discord連携"):
+            saved_url = discord.load_url()
+            st.caption("友人のDiscordのチャンネルに予想を投稿します。URLはこのPCの中にだけ保存されます。")
+            new_url = st.text_input("ウェブフックのURL", value=saved_url, type="password")
+            if st.button("保存", width="stretch"):
+                if discord.valid_url(new_url):
+                    discord.save_url(new_url)
+                    st.success("保存しました。予想画面の「Discordに送る」で投稿できます。")
+                else:
+                    st.error("ウェブフックのURLの形ではありません。Discordで「ウェブフックURLをコピー」したものを貼ってください。")
     st.divider()
-    # Webに載せた版（Streamlit Community Cloud は /mount/src に置かれる）は、GitHub に上げると自動で新しくなる
-    on_cloud = str(ROOT).startswith("/mount/src")
-    if not on_cloud and st.button("アプリを最新版に更新", type="primary", width="stretch"):
+    if not ON_CLOUD and st.button("アプリを最新版に更新", type="primary", width="stretch"):
         from boatrace_yosou.update import update
 
         try:
@@ -242,7 +254,7 @@ else:
     st.caption("オッズは当日の締切前だけ取得できます。")
 
 # ---- Discord ----
-if discord.load_url():
+if webhook_url():
     if discord_slot.button("Discordに送る", width="stretch", help="このレースの1着確率とおすすめの買い目（オッズがあれば妙味の買い目も）を投稿します"):
         msg = discord.format_message(
             race_date, venue, VENUES.get(venue, venue), race, model_col, bool(has_ex.loc[g.index].all()),
@@ -251,7 +263,7 @@ if discord.load_url():
             vals,
         )
         try:
-            discord.send(discord.load_url(), msg)
+            discord.send(webhook_url(), msg)
             st.toast("Discordに投稿しました。", icon="✅")
         except Exception as e:
             st.error(f"Discordに投稿できませんでした: {e}")

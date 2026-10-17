@@ -9,33 +9,42 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from boatrace_yosou import beforeinfo, odds, ui
+from boatrace_yosou.backtest import evaluate
 from boatrace_yosou.constants import TICKET_TYPES, VENUES
 from boatrace_yosou.download import DATA_DIR, download_day, extract_lzh
-from boatrace_yosou.model import RACE_KEY, GBMModel, RuleModel, add_exhibition, add_features, top_tickets
-from boatrace_yosou import beforeinfo
-from boatrace_yosou.backtest import evaluate
 from boatrace_yosou.history import add_history
+from boatrace_yosou.model import RACE_KEY, GBMModel, RuleModel, add_exhibition, add_features, ticket_probs
 from boatrace_yosou.parse import parse_b, parse_k
 
 ROOT = Path(__file__).resolve().parent
 MODEL_DIR = ROOT / "models"
 
-st.set_page_config(page_title="競艇予想", layout="wide")
-st.title("競艇予想（試作）")
+st.set_page_config(page_title="競艇予想", page_icon="🚤", layout="wide")
+st.markdown(ui.CSS, unsafe_allow_html=True)
 
 with st.sidebar:
+    st.markdown("### 🚤 設定")
     race_date = st.date_input("開催日", value=date.today())
-    if st.button("この日の出走表を公式から取得"):
+    top_n = st.slider("券種ごとの表示点数", 1, 10, 5)
+    st.markdown("**妙味（期待値）の目安**")
+    ev_line = st.slider("期待値がこれ以上なら印を付ける", 1.0, 2.0, 1.2, 0.05,
+                        help="期待値 = 当たる確率 × オッズ。1を超えると、確率のわりに配当が高い買い目です")
+    min_prob = st.slider("ただし当たる確率がこれ以上のものだけ", 0.0, 0.10, 0.01, 0.005, format="%.3f",
+                         help="確率がとても低い大穴は、予想の確率そのものがぶれやすいので外します")
+    st.divider()
+    refresh_results = st.button("この日の結果を取り直す", help="当日の結果は場ごとに、全レース終了後に公開されます", width="stretch")
+    if st.button("この日の出走表を取り直す", width="stretch"):
         try:
-            path = download_day("B", race_date)
-            st.success("取得しました" if path else "この日の出走表はまだありません")
+            p = DATA_DIR / "B" / f"b{race_date:%y%m%d}.txt"
+            p.unlink(missing_ok=True)
+            st.success("取得しました" if download_day("B", race_date) else "この日の出走表はまだありません")
         except Exception as e:  # 通信エラーなどはそのまま見せる
             st.error(f"取得できませんでした: {e}")
-    uploaded = st.file_uploader("または番組表ファイル（.lzh / .txt）を読み込む", type=["lzh", "txt"])
-    top_n = st.slider("券種ごとの表示点数", 1, 10, 5)
-    refresh_results = st.button("この日の結果を公式から取り直す", help="当日の結果は夜にまとめて公開されます")
+    with st.expander("ファイルから読み込む"):
+        uploaded = st.file_uploader("番組表ファイル（.lzh / .txt）", type=["lzh", "txt"])
     st.divider()
-    if st.button("アプリを最新版に更新"):
+    if st.button("アプリを最新版に更新", type="primary", width="stretch"):
         from boatrace_yosou.update import update
 
         try:
@@ -79,80 +88,86 @@ def load_history(local_files: tuple[str, ...]) -> pd.DataFrame:
     return pd.concat([x.reindex(columns=cols) for x in parts if not x.empty], ignore_index=True).drop_duplicates(["date", "venue", "race", "boat"])
 
 
-if uploaded is not None:
-    blob = uploaded.getvalue()
-    text = extract_lzh(blob) if uploaded.name.endswith(".lzh") else blob.decode("cp932", errors="replace")
-else:
-    path = DATA_DIR / "B" / f"b{race_date:%y%m%d}.txt"
-    tried = st.session_state.setdefault("auto_fetched", set())
-    if not path.exists() and ("B", race_date) not in tried:
-        # 選んだ日の出走表が手元になければ、公式から自動で取りにいく（同じ日は1回だけ）
-        tried.add(("B", race_date))
-        with st.spinner("出走表を公式から取得しています…"):
-            try:
-                path = download_day("B", race_date) or path
-            except Exception as e:
-                st.warning(f"出走表を自動で取得できませんでした: {e}")
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-
-entries = parse_b(text, race_date) if text else pd.DataFrame()
-if entries.empty:
-    st.info("この日の出走表はまだ公式に出ていません（たいてい前日の夕方以降に出ます）。あとで左のボタンを押すか、ファイルを読み込んでください。")
-    st.stop()
-
-
-
 def fetch_once(kind: str, d: date, force: bool = False) -> Path | None:
     """手元になければ公式から取る。同じ日・同じ種類は1回の起動で1回だけ（取り直しボタンを除く）。"""
     path = DATA_DIR / kind / f"{kind.lower()}{d:%y%m%d}.txt"
     tried = st.session_state.setdefault("auto_fetched", set())
     # 当日の結果は場ごとに夜までかけて増えるので、30分たったら取り直す
-    stale = d == date.today() and path.exists() and time.time() - path.stat().st_mtime > 1800
+    stale = kind == "K" and d == date.today() and path.exists() and time.time() - path.stat().st_mtime > 1800
     if (force or stale or not path.exists()) and (force or stale or (kind, d) not in tried) and d <= date.today():
         tried.add((kind, d))
         if (force or stale) and path.exists():
             path.unlink()
         try:
-            download_day(kind, d)
+            with st.spinner("公式から取得しています…"):
+                download_day(kind, d)
         except Exception as e:
             st.warning(f"公式から取得できませんでした: {e}")
     return path if path.exists() else None
 
+
+# ---- 出走表 ----
+if uploaded is not None:
+    blob = uploaded.getvalue()
+    text = extract_lzh(blob) if uploaded.name.endswith(".lzh") else blob.decode("cp932", errors="replace")
+else:
+    b_path = fetch_once("B", race_date)
+    text = b_path.read_text(encoding="utf-8") if b_path else ""
+entries = parse_b(text, race_date) if text else pd.DataFrame()
+
+if entries.empty:
+    st.markdown(ui.hero("競艇予想", f"{race_date.year}年{race_date.month}月{race_date.day}日"), unsafe_allow_html=True)
+    st.info("この日の出走表はまだ公式に出ていません（たいてい前日の夕方以降に出ます）。")
+    st.stop()
 
 k_path = fetch_once("K", race_date, force=refresh_results)
 results, payouts = parse_k(k_path.read_text(encoding="utf-8"), race_date) if k_path else (pd.DataFrame(), pd.DataFrame())
 
 rule, gbm, gbm_ex = load_models()
 venues = sorted(entries["venue"].unique())
-c1, c2, c3 = st.columns(3)
-venue = c1.selectbox("場", venues, format_func=lambda v: f"{v} {VENUES.get(v, '')}")
+c1, c2, c3 = st.columns([2, 2, 3])
+venue = c1.selectbox("場", venues, format_func=lambda v: f"{VENUES.get(v, v)}")
 races = sorted(entries.loc[entries["venue"] == venue, "race"].unique())
 race = c2.selectbox("レース", races, format_func=lambda r: f"{r}R")
-choices = ["ルール"] + (["LightGBM"] if gbm is not None else [])
-model_col = c3.radio("予想に使うモデル", choices, index=len(choices) - 1, horizontal=True)
+choices = (["LightGBM"] if gbm is not None else []) + ["ルール"]
+model_col = c3.radio("予想に使うモデル", choices, horizontal=True,
+                     help="LightGBM は過去のレースから学んだ予想、ルールは決まった計算式の予想です")
 
-# 展示タイム: 結果ファイルがある日はそこから、まだの日は直前情報ページから（このレースだけ取りにいく）
+st.markdown(ui.hero(f"{VENUES.get(venue, venue)} {race}R",
+                    f"{race_date.year}年{race_date.month}月{race_date.day}日・{model_col}で予想"), unsafe_allow_html=True)
+
+# ---- 展示タイム: 結果ファイルがある日はそこから、まだのレースは直前情報ページから（このレースだけ） ----
 ex_store = st.session_state.setdefault("exhibition", {})
+odds_store = st.session_state.setdefault("odds", {})
 key = (race_date, venue, race)
 ex_cols = RACE_KEY + ["boat", "exhibition"]
 from_results = results[ex_cols] if not results.empty else pd.DataFrame(columns=ex_cols)
 race_done = ((from_results["venue"] == venue) & (from_results["race"] == race)).any()
-if not race_done and race_date == date.today():
-    refetch = st.button("展示タイムを取り直す（直前情報）", help="展示航走はレースのおよそ20〜30分前。終わると公式に出ます")
+is_live = not race_done and race_date == date.today()
+if is_live:
+    b1, b2, _ = st.columns([1, 1, 2])
+    refetch = b1.button("展示タイムを取り直す", help="展示航走は締切のおよそ20〜30分前。終わると公式に出ます", width="stretch")
+    get_odds = b2.button("オッズを取得", help="締切前のオッズを3ページ取るので少し時間がかかります", width="stretch")
     if refetch or key not in ex_store:
         try:
             ex_store[key] = beforeinfo.fetch(race_date, venue, race)
         except Exception as e:
             st.warning(f"直前情報を取得できませんでした: {e}")
+    if get_odds:
+        try:
+            with st.spinner("オッズを取得しています…"):
+                odds_store[key] = (odds.fetch(race_date, venue, race), time.strftime("%H:%M"))
+        except Exception as e:
+            st.warning(f"オッズを取得できませんでした: {e}")
 from_before = [v.assign(date=k[0], venue=k[1], race=k[2]) for k, v in ex_store.items() if k[0] == race_date]
-# 同じレースが両方にあれば結果ファイルの方を使う
 ex_all = pd.concat([from_results] + [x[ex_cols] for x in from_before], ignore_index=True).drop_duplicates(
     RACE_KEY + ["boat"], keep="first")
 
+# ---- 予想 ----
 df = add_features(entries)
 local_k = tuple(sorted(str(p) for p in (DATA_DIR / "K").glob("k*.txt")))
 df = add_history(df, load_history(local_k))
-ex_all = ex_all[RACE_KEY + ["boat", "exhibition"]].astype({"race": int, "boat": int, "exhibition": float})
+ex_all = ex_all.astype({"race": int, "boat": int, "exhibition": float})
 df = add_exhibition(df.drop(columns="exhibition").merge(ex_all, on=RACE_KEY + ["boat"], how="left"))
 # 6艇とも展示タイムがそろったレースだけ「展示あり」で予想する
 has_ex = df.groupby(RACE_KEY)["ex_diff"].transform(lambda x: x.notna().all())
@@ -162,69 +177,83 @@ if gbm is not None:
     if gbm_ex is not None and has_ex.any():
         p = p.where(~has_ex, gbm_ex.predict(df))
     df["LightGBM"] = p.values
-else:
-    st.caption("学習済みモデルがないため、ルールベースの予想だけを表示しています（backtest を実行すると作られます）。")
 
 g = df[(df["venue"] == venue) & (df["race"] == race)].sort_values("boat")
-if has_ex.loc[g.index].all():
-    st.success("このレースは展示タイムを反映した予想です。")
-else:
-    st.caption("このレースはまだ展示タイムが出ていないため、出走表だけで予想しています。展示のあとに「展示タイムを取り直す」を押すと反映されます。")
-# 最近90日のモーター・ボートの2連対率（過去の結果が手元にあるときだけ出る）
-recent = [c for c in ["motor_recent_top2", "boat_recent_top2"] if g[c].nunique() > 1]
-show = g[["boat", "name", "class", "age", "nat_win", "loc_win", "motor_2ren", "boat_2ren"] + recent + ["exhibition"] + choices].rename(columns={
-    "exhibition": "展示タイム",
-    "boat": "艇", "name": "選手", "class": "級", "age": "年齢", "nat_win": "全国勝率",
-    "loc_win": "当地勝率", "motor_2ren": "モーター2連率", "boat_2ren": "ボート2連率",
-    "motor_recent_top2": "モーター近況", "boat_recent_top2": "ボート近況",
-})
-st.subheader("各艇の1着確率")
-fmt = {"全国勝率": "{:.2f}", "当地勝率": "{:.2f}", "モーター2連率": "{:.1f}", "ボート2連率": "{:.1f}", "展示タイム": "{:.2f}"}
-fmt.update({c: "{:.1%}" for c in choices + ["モーター近況", "ボート近況"] if c in show})
-st.dataframe(show.style.format(fmt), hide_index=True, width="stretch")
+race_odds, odds_time = odds_store.get(key, ({}, None))
+status = [ui.pill("展示タイム反映済み", "ok") if has_ex.loc[g.index].all() else ui.pill("展示タイム待ち", "wait")]
+if race_odds:
+    status.append(ui.pill(f"オッズ {odds_time} 時点", "info"))
+elif is_live:
+    status.append(ui.pill("オッズ未取得", "wait"))
+if race_done:
+    status.append(ui.pill("結果確定", "info"))
+st.markdown(" ".join(status), unsafe_allow_html=True)
+
+st.markdown(ui.section("各艇の1着確率"), unsafe_allow_html=True)
+st.markdown(ui.boats_table(g, model_col), unsafe_allow_html=True)
 
 race_pay = payouts[(payouts["venue"] == venue) & (payouts["race"] == race)] if not payouts.empty else payouts
 hit_combos = {(r.ticket, r.combo): r.payout for r in race_pay.itertuples()}
+all_probs = ticket_probs(dict(zip(g["boat"], g[model_col])))
 
-st.subheader(f"買い目の確率（{model_col}）")
-picks = top_tickets(dict(zip(g["boat"], g[model_col])), top_n)
+
+def pick_info(t: str, c: str, p: float) -> dict:
+    o = race_odds.get(t, {}).get(c)
+    ev = p * o if o else None
+    return {"combo": c, "prob": p, "odds": o, "ev": ev, "hit": hit_combos.get((t, c)),
+            "value": ev is not None and ev >= ev_line and p >= min_prob}
+
+
+st.markdown(ui.section("おすすめの買い目（当たりやすい順）"), unsafe_allow_html=True)
 cols = st.columns(len(TICKET_TYPES))
 for col, t in zip(cols, TICKET_TYPES):
-    col.markdown(f"**{t}**")
-    table = pd.DataFrame(picks[t], columns=["組番", "確率"])
-    if hit_combos:
-        table["結果"] = [f"的中 {hit_combos[(t, c)]:,}円" if (t, c) in hit_combos else "" for c in table["組番"]]
-    col.dataframe(table.style.format({"確率": "{:.1%}"}), hide_index=True)
+    top = sorted(all_probs[t].items(), key=lambda kv: -kv[1])[:top_n]
+    col.markdown(ui.ticket_card(t, [pick_info(t, c, p) for c, p in top]), unsafe_allow_html=True)
 
-st.subheader("実際の結果")
+st.markdown(ui.section("妙味のある買い目（確率のわりに配当が高い順）"), unsafe_allow_html=True)
+if race_odds:
+    cands = [pick_info(t, c, p) | {"ticket": t} for t in TICKET_TYPES for c, p in all_probs[t].items()]
+    vals = sorted([x for x in cands if x["value"]], key=lambda x: -x["ev"])[:8]
+    if vals:
+        vcols = st.columns(len(TICKET_TYPES))
+        for col, t in zip(vcols, TICKET_TYPES):
+            mine = [x for x in vals if x["ticket"] == t]
+            if mine:
+                col.markdown(ui.ticket_card(t, mine), unsafe_allow_html=True)
+    else:
+        st.caption(f"期待値 {ev_line:.2f} 以上（確率 {min_prob:.1%} 以上）の買い目はありません。見送りも選択肢です。")
+    st.caption("期待値 = 予想の確率 × オッズ。1を超えるほど、確率のわりに配当が高い買い目です。オッズは締切まで動くので、直前に取り直してください。")
+elif is_live:
+    st.caption("「オッズを取得」を押すと、確率とオッズを比べて妙味のある買い目に印を付けます。")
+else:
+    st.caption("オッズは当日の締切前だけ取得できます。")
+
+# ---- 結果 ----
+st.markdown(ui.section("実際の結果"), unsafe_allow_html=True)
 race_res = results[(results["venue"] == venue) & (results["race"] == race)] if not results.empty else results
 if race_res.empty:
-    st.info("このレースの結果はまだ公式に出ていません。当日の結果は夜にまとめて公開されるので、あとで左の「結果を取り直す」を押してください。")
+    st.caption("このレースの結果はまだ公式に出ていません。結果は場ごとに、全レース終了後に公開されます。")
 else:
-    names = dict(zip(g["boat"], g["name"]))
     order = race_res.sort_values("position", na_position="last")
-    st.dataframe(pd.DataFrame({
-        "着": [str(int(p)) if pd.notna(p) else s for p, s in zip(order["position"], order["status"])],
-        "艇": order["boat"],
-        "選手": order["boat"].map(names),
-        "進入": order["course"],
-        "スタート": order["st"],
-        "予想の1着確率": order["boat"].map(dict(zip(g["boat"], g[model_col]))),
-    }).style.format({"予想の1着確率": "{:.1%}", "スタート": "{:.2f}", "進入": "{:.0f}"}), hide_index=True)
-    pay_cols = st.columns(len(TICKET_TYPES))
-    for col, t in zip(pay_cols, TICKET_TYPES):
-        rows = race_pay[race_pay["ticket"] == t]
-        col.markdown(f"**{t}**")
-        col.markdown(f"### {' / '.join(rows['combo']) or 'なし'}")
-        col.caption("払戻（100円あたり） " + " / ".join(f"{v:,}円" for v in rows["payout"]))
+    st.markdown(ui.result_places(order, dict(zip(g["boat"], g["name"])), dict(zip(g["boat"], g[model_col]))),
+                unsafe_allow_html=True)
+    pcols = st.columns(len(TICKET_TYPES))
+    for col, t in zip(pcols, TICKET_TYPES):
+        col.markdown(ui.payout_card(t, race_pay[race_pay["ticket"] == t]), unsafe_allow_html=True)
 
-    # この日の全レースで、いまの設定（モデルと点数）どおりに100円ずつ買った場合の成績
+# この日の全レースで、いまの設定（モデルと点数）どおりに100円ずつ買った場合の成績
+if not payouts.empty:
     done = df.merge(payouts[RACE_KEY].drop_duplicates(), on=RACE_KEY)
     if not done.empty:
-        st.subheader(f"この日の成績（{model_col}・券種ごとに上位{top_n}点）")
+        st.markdown(ui.section(f"この日の成績（{model_col}・券種ごとに上位{top_n}点を100円ずつ）"), unsafe_allow_html=True)
         summary = evaluate(done.reset_index(drop=True), done[model_col], payouts, top_n)
-        summary = summary.rename(columns={"races": "レース数", "hits": "的中数", "cost": "購入額", "return": "払戻額"})
-        st.dataframe(summary[["レース数", "的中数", "的中率", "購入額", "払戻額", "回収率"]].style.format(
-            {"的中率": "{:.1%}", "回収率": "{:.1%}", "購入額": "{:,}円", "払戻額": "{:,}円"}), width="stretch")
+        kcols = st.columns(len(TICKET_TYPES))
+        for col, t in zip(kcols, TICKET_TYPES):
+            s = summary.loc[t]
+            tone = "good" if s["回収率"] >= 1 else "bad"
+            col.markdown(ui.kpi(f"{t}（{int(s['races'])}レース）", f"回収率 {s['回収率']:.0%}", tone)
+                         + f'<div class="note" style="margin-top:6px">的中率 {s["的中率"]:.0%}・'
+                           f'{int(s["cost"]):,}円 → {int(s["return"]):,}円</div>', unsafe_allow_html=True)
 
-st.caption("確率は出走表と展示タイムから計算した目安です。直前のオッズは反映していません。")
+st.markdown('<div class="note" style="margin-top:24px">確率は出走表・展示タイム・過去の傾向から計算した目安です。'
+            '舟券の購入は自己責任で、無理のない範囲で楽しんでください。</div>', unsafe_allow_html=True)

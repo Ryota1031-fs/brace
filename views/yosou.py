@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +23,11 @@ MODEL_DIR = ROOT / "models"
 ON_CLOUD = str(ROOT).startswith("/mount/src")
 
 
+def today() -> date:
+    """日本の日付。Web版のサーバーは海外の時刻で動いているので、そのまま date.today() を使うと朝9時まで前の日になる。"""
+    return datetime.now(timezone(timedelta(hours=9))).date()
+
+
 def webhook_url() -> str:
     """Web版は見る人みんなに設定欄が見えるので、URLは管理画面の Secrets にだけ置く。"""
     if not ON_CLOUD:
@@ -37,7 +42,7 @@ st.markdown(ui.CSS, unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("### 🚤 設定")
-    race_date = st.date_input("開催日", value=date.today())
+    race_date = st.date_input("開催日", value=today())
     top_n = st.slider("券種ごとの表示点数", 1, 10, 5)
     st.markdown("**妙味（期待値）の目安**")
     ev_line = st.slider("期待値がこれ以上なら印を付ける", 1.0, 2.0, 1.2, 0.05,
@@ -116,8 +121,8 @@ def fetch_once(kind: str, d: date, force: bool = False) -> Path | None:
     path = DATA_DIR / kind / f"{kind.lower()}{d:%y%m%d}.txt"
     tried = st.session_state.setdefault("auto_fetched", set())
     # 当日の結果は場ごとに夜までかけて増えるので、30分たったら取り直す
-    stale = kind == "K" and d == date.today() and path.exists() and time.time() - path.stat().st_mtime > 1800
-    if (force or stale or not path.exists()) and (force or stale or (kind, d) not in tried) and d <= date.today():
+    stale = kind == "K" and d == today() and path.exists() and time.time() - path.stat().st_mtime > 1800
+    if (force or stale or not path.exists()) and (force or stale or (kind, d) not in tried) and d <= today():
         tried.add((kind, d))
         if (force or stale) and path.exists():
             path.unlink()
@@ -149,7 +154,8 @@ results, payouts = parse_k(k_path.read_text(encoding="utf-8"), race_date) if k_p
 rule, gbm, gbm_ex = load_models()
 venues = sorted(entries["venue"].unique())
 c1, c2, c3 = st.columns([2, 2, 3])
-venue = c1.selectbox("場", venues, format_func=lambda v: f"{VENUES.get(v, v)}")
+venue = c1.selectbox("場", venues, format_func=lambda v: f"{VENUES.get(v, v)}",
+                     help=f"この日に開催している{len(venues)}場だけが出ます（全24場のうち、毎日開催しているのは一部です）")
 races = sorted(entries.loc[entries["venue"] == venue, "race"].unique())
 race = c2.selectbox("レース", races, format_func=lambda r: f"{r}R")
 choices = (["LightGBM"] if gbm is not None else []) + ["ルール"]
@@ -166,7 +172,7 @@ key = (race_date, venue, race)
 ex_cols = RACE_KEY + ["boat", "exhibition"]
 from_results = results[ex_cols] if not results.empty else pd.DataFrame(columns=ex_cols)
 race_done = ((from_results["venue"] == venue) & (from_results["race"] == race)).any()
-is_live = not race_done and race_date == date.today()
+is_live = not race_done and race_date == today()
 b1, b2, b3, _ = st.columns([1, 1, 1, 1])
 discord_slot = b3.empty()  # 「Discordに送る」は買い目を計算したあとで、ここに置く
 discord_note = st.empty()  # 送った結果はボタンのすぐ下に出す

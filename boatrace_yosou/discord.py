@@ -64,5 +64,15 @@ def format_message(d: date, venue: str, venue_name: str, race: int, model: str, 
 
 
 def send(url: str, content: str) -> None:
-    resp = requests.post(url, json={"content": content, "username": "競艇予想"}, timeout=15)
-    resp.raise_for_status()
+    """失敗したら、原因がわかる日本語の文で RuntimeError を出す。"""
+    url = url.strip().strip('"')
+    if not valid_url(url):
+        raise RuntimeError("ウェブフックのURLの形ではありません。Discordで「ウェブフックURLをコピー」したものを、そのまま全部貼ってください。")
+    try:
+        resp = requests.post(url, json={"content": content, "username": "競艇予想"}, timeout=15)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Discordにつながりませんでした（{e}）") from e
+    if resp.status_code in (401, 404):
+        raise RuntimeError("ウェブフックのURLが違うか、Discordで削除されています。URLをコピーし直して設定してください。")
+    if not resp.ok:
+        raise RuntimeError(f"Discordに断られました（{resp.status_code}: {resp.text[:200]}）")

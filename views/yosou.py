@@ -169,6 +169,7 @@ race_done = ((from_results["venue"] == venue) & (from_results["race"] == race)).
 is_live = not race_done and race_date == date.today()
 b1, b2, b3, _ = st.columns([1, 1, 1, 1])
 discord_slot = b3.empty()  # 「Discordに送る」は買い目を計算したあとで、ここに置く
+discord_note = st.empty()  # 送った結果はボタンのすぐ下に出す
 if is_live:
     refetch = b1.button("展示タイムを取り直す", help="展示航走は締切のおよそ20〜30分前。終わると公式に出ます", width="stretch")
     get_odds = b2.button("オッズを取得", help="締切前のオッズを3ページ取るので少し時間がかかります", width="stretch")
@@ -264,9 +265,9 @@ if webhook_url():
         )
         try:
             discord.send(webhook_url(), msg)
-            st.toast("Discordに投稿しました。", icon="✅")
+            discord_note.success("Discordに投稿しました。")
         except Exception as e:
-            st.error(f"Discordに投稿できませんでした: {e}")
+            discord_note.error(f"Discordに投稿できませんでした: {e}")
 
 # ---- 結果 ----
 st.markdown(ui.section("実際の結果"), unsafe_allow_html=True)

@@ -153,8 +153,9 @@ ex_cols = RACE_KEY + ["boat", "exhibition"]
 from_results = results[ex_cols] if not results.empty else pd.DataFrame(columns=ex_cols)
 race_done = ((from_results["venue"] == venue) & (from_results["race"] == race)).any()
 is_live = not race_done and race_date == date.today()
+b1, b2, b3, _ = st.columns([1, 1, 1, 1])
+discord_slot = b3.empty()  # 「Discordに送る」は買い目を計算したあとで、ここに置く
 if is_live:
-    b1, b2, _ = st.columns([1, 1, 2])
     refetch = b1.button("展示タイムを取り直す", help="展示航走は締切のおよそ20〜30分前。終わると公式に出ます", width="stretch")
     get_odds = b2.button("オッズを取得", help="締切前のオッズを3ページ取るので少し時間がかかります", width="stretch")
     if refetch or key not in ex_store:
@@ -240,7 +241,7 @@ else:
 
 # ---- Discord ----
 if discord.load_url():
-    if st.button("Discordに送る", help="このレースの1着確率とおすすめの買い目（オッズがあれば妙味の買い目も）を投稿します"):
+    if discord_slot.button("Discordに送る", width="stretch", help="このレースの1着確率とおすすめの買い目（オッズがあれば妙味の買い目も）を投稿します"):
         msg = discord.format_message(
             race_date, venue, VENUES.get(venue, venue), race, model_col, bool(has_ex.loc[g.index].all()),
             dict(zip(g["boat"], g[model_col])),
@@ -249,11 +250,9 @@ if discord.load_url():
         )
         try:
             discord.send(discord.load_url(), msg)
-            st.success("Discordに投稿しました。")
+            st.toast("Discordに投稿しました。", icon="✅")
         except Exception as e:
-            st.error(f"投稿できませんでした: {e}")
-else:
-    st.caption("画面左の「Discord連携」にウェブフックのURLを保存すると、ここに「Discordに送る」ボタンが出ます。")
+            st.error(f"Discordに投稿できませんでした: {e}")
 
 # ---- 結果 ----
 st.markdown(ui.section("実際の結果"), unsafe_allow_html=True)
